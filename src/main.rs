@@ -1,3 +1,7 @@
+pub mod autocomplete;
+pub mod expansions;
+pub mod task_engine;
+
 use gpui::{
     App, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div, prelude::*, px,
     rgb, size,
