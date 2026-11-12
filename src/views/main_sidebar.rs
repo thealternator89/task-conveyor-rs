@@ -5,6 +5,7 @@ use crate::theme::{ActiveTheme, ThemePalette};
 use crate::views::autocomplete_popover::render_autocomplete_popover;
 use crate::views::command_input::{CommandInputEvent, CommandInputView};
 use crate::views::tag_text::{render_task_text_with_options, render_task_text_with_tags};
+use crate::window_manager::WindowManager;
 use gpui::{
     Animation, AnimationExt as _, BoxShadow, Context, Entity, FontWeight, MouseButton, PathBuilder,
     SharedString, Window, canvas, div, img, linear_color_stop, linear_gradient, point, prelude::*,
@@ -15,6 +16,7 @@ use std::time::Duration;
 pub struct MainSidebarView {
     config_store: Entity<ConfigStore>,
     task_store: Entity<TaskStore>,
+    window_manager: Option<Entity<WindowManager>>,
     pub command_input: Entity<CommandInputView>,
     pub dock_side: Option<DockSide>,
     pub always_on_top: bool,
@@ -25,6 +27,7 @@ impl MainSidebarView {
         window: &mut Window,
         config_store: Entity<ConfigStore>,
         task_store: Entity<TaskStore>,
+        window_manager: Option<Entity<WindowManager>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let command_input =
@@ -33,6 +36,24 @@ impl MainSidebarView {
         cx.observe(&config_store, |_, _, cx| cx.notify()).detach();
         cx.observe(&task_store, |_, _, cx| cx.notify()).detach();
         cx.observe(&command_input, |_, _, cx| cx.notify()).detach();
+
+        let initial_dock_side = window_manager
+            .as_ref()
+            .and_then(|wm| wm.read(cx).dock_side);
+        let initial_always_on_top = window_manager
+            .as_ref()
+            .map(|wm| wm.read(cx).always_on_top)
+            .unwrap_or(false);
+
+        if let Some(wm) = &window_manager {
+            cx.observe(wm, |this, wm, cx| {
+                let wm_state = wm.read(cx);
+                this.dock_side = wm_state.dock_side;
+                this.always_on_top = wm_state.always_on_top;
+                cx.notify();
+            })
+            .detach();
+        }
 
         cx.subscribe(
             &command_input,
@@ -58,10 +79,15 @@ impl MainSidebarView {
         Self {
             config_store,
             task_store,
+            window_manager,
             command_input,
-            dock_side: None,
-            always_on_top: false,
+            dock_side: initial_dock_side,
+            always_on_top: initial_always_on_top,
         }
+    }
+
+    pub fn window_manager(&self) -> Option<&Entity<WindowManager>> {
+        self.window_manager.as_ref()
     }
 
     pub fn apply_window_outcome(&mut self, outcome: &CommandOutcome, cx: &mut Context<Self>) {

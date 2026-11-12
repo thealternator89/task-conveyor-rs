@@ -1,6 +1,7 @@
 use crate::config_store::ConfigStore;
 use crate::paths::tasks_file_path;
 use crate::task_engine::{CommandOutcome, TaskEngine, TaskItem};
+use crate::window_manager::WindowManager;
 use gpui::{Context, Entity, Task};
 use std::fs;
 use std::io;
@@ -48,6 +49,7 @@ pub struct TaskStore {
     warning_timer: Option<Task<()>>,
     pub storage_path: PathBuf,
     config_store: Entity<ConfigStore>,
+    window_manager: Option<Entity<WindowManager>>,
 }
 
 impl TaskStore {
@@ -60,7 +62,12 @@ impl TaskStore {
             warning_timer: None,
             storage_path,
             config_store,
+            window_manager: None,
         }
+    }
+
+    pub fn set_window_manager(&mut self, window_manager: Entity<WindowManager>) {
+        self.window_manager = Some(window_manager);
     }
 
     pub fn tasks(&self) -> &[TaskItem] {
@@ -121,12 +128,36 @@ impl TaskStore {
                 });
             }
             CommandOutcome::Quit => {
+                if let Some(wm) = self.window_manager.clone() {
+                    wm.update(cx, |wm, cx| {
+                        wm.cleanup_on_quit(cx);
+                    });
+                }
                 cx.quit();
             }
-            CommandOutcome::TogglePin
-            | CommandOutcome::Dock(_)
-            | CommandOutcome::Float
-            | CommandOutcome::NoOp => {}
+            CommandOutcome::TogglePin => {
+                if let Some(wm) = self.window_manager.clone() {
+                    wm.update(cx, |wm, cx| {
+                        wm.toggle_always_on_top(cx);
+                    });
+                }
+            }
+            CommandOutcome::Dock(side) => {
+                let side = *side;
+                if let Some(wm) = self.window_manager.clone() {
+                    wm.update(cx, |wm, cx| {
+                        wm.dock_window(side, cx);
+                    });
+                }
+            }
+            CommandOutcome::Float => {
+                if let Some(wm) = self.window_manager.clone() {
+                    wm.update(cx, |wm, cx| {
+                        wm.float_window(cx);
+                    });
+                }
+            }
+            CommandOutcome::NoOp => {}
         }
 
         outcome
