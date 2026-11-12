@@ -495,6 +495,8 @@ impl ConfigStore {
         if let Some(ref active) = self.active_hotkey {
             self.formatted_hotkey = format_hotkey_for_display(active);
             self.restart_required = *active != self.app_config.global_hotkey;
+        } else {
+            self.formatted_hotkey.clear();
         }
         cx.notify();
     }

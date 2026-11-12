@@ -41,23 +41,7 @@ impl MainSidebarView {
                     let outcome = this
                         .task_store
                         .update(cx, |store, cx| store.execute_command(text, cx));
-                    match outcome {
-                        CommandOutcome::TogglePin => {
-                            this.always_on_top = !this.always_on_top;
-                            cx.notify();
-                        }
-                        CommandOutcome::Dock(side) => {
-                            this.dock_side = Some(side);
-                            this.always_on_top = true;
-                            cx.notify();
-                        }
-                        CommandOutcome::Float => {
-                            this.dock_side = None;
-                            this.always_on_top = false;
-                            cx.notify();
-                        }
-                        _ => {}
-                    }
+                    this.apply_window_outcome(&outcome, cx);
                 }
                 CommandInputEvent::DismissSpotlight => {}
             },
@@ -77,6 +61,26 @@ impl MainSidebarView {
             command_input,
             dock_side: None,
             always_on_top: false,
+        }
+    }
+
+    pub fn apply_window_outcome(&mut self, outcome: &CommandOutcome, cx: &mut Context<Self>) {
+        match outcome {
+            CommandOutcome::TogglePin => {
+                self.always_on_top = !self.always_on_top;
+                cx.notify();
+            }
+            CommandOutcome::Dock(side) => {
+                self.dock_side = Some(*side);
+                self.always_on_top = true;
+                cx.notify();
+            }
+            CommandOutcome::Float => {
+                self.dock_side = None;
+                self.always_on_top = false;
+                cx.notify();
+            }
+            _ => {}
         }
     }
 
