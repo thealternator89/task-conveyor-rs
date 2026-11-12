@@ -95,16 +95,11 @@ fn main() {
                 let executor = cx.background_executor().clone();
                 loop {
                     executor.timer(std::time::Duration::from_millis(500)).await;
-                    let should_continue = cx
-                        .update(|cx| {
-                            timer_wm.update(cx, |wm, cx| {
-                                wm.handle_poschanged_if_needed(cx);
-                            });
-                        })
-                        .is_ok();
-                    if !should_continue {
-                        break;
-                    }
+                    cx.update(|cx| {
+                        timer_wm.update(cx, |wm, cx| {
+                            wm.handle_poschanged_if_needed(cx);
+                        });
+                    });
                 }
             })
             .detach();
