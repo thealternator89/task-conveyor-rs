@@ -13,6 +13,7 @@ use config_store::ConfigStore;
 use gpui::{App, Bounds, WindowBounds, WindowOptions, point, prelude::*, px, size};
 use gpui_platform::application;
 use task_store::TaskStore;
+use views::command_input::bind_command_input_keys;
 use views::main_sidebar::MainSidebarView;
 
 fn centered_sidebar_bounds(cx: &App) -> Bounds<gpui::Pixels> {
@@ -33,6 +34,7 @@ fn main() {
     paths::migrate_legacy_user_data();
 
     application().with_assets(Assets).run(|cx: &mut App| {
+        bind_command_input_keys(cx);
         let config_store = cx.new(ConfigStore::new);
         let task_store = cx.new(|cx| TaskStore::new(config_store.clone(), cx));
 

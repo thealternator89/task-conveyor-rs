@@ -1,18 +1,21 @@
 use crate::config_store::ConfigStore;
-use crate::task_engine::{DockSide, TaskItem};
+use crate::task_engine::{CommandOutcome, DockSide, TaskItem};
 use crate::task_store::TaskStore;
 use crate::theme::{ActiveTheme, ThemePalette};
+use crate::views::autocomplete_popover::render_autocomplete_popover;
+use crate::views::command_input::{CommandInputEvent, CommandInputView};
 use crate::views::tag_text::{render_task_text_with_options, render_task_text_with_tags};
 use gpui::{
     Animation, AnimationExt as _, BoxShadow, Context, Entity, FontWeight, MouseButton, PathBuilder,
     SharedString, Window, canvas, div, img, linear_color_stop, linear_gradient, point, prelude::*,
-     pulsating_between, px, rems, rgb, svg,
+    pulsating_between, px, rems, rgb, svg,
 };
 use std::time::Duration;
 
 pub struct MainSidebarView {
     config_store: Entity<ConfigStore>,
     task_store: Entity<TaskStore>,
+    pub command_input: Entity<CommandInputView>,
     pub dock_side: Option<DockSide>,
     pub always_on_top: bool,
 }
@@ -24,8 +27,43 @@ impl MainSidebarView {
         task_store: Entity<TaskStore>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let command_input =
+            cx.new(|cx| CommandInputView::new(config_store.clone(), false, cx));
+
         cx.observe(&config_store, |_, _, cx| cx.notify()).detach();
         cx.observe(&task_store, |_, _, cx| cx.notify()).detach();
+        cx.observe(&command_input, |_, _, cx| cx.notify()).detach();
+
+        cx.subscribe(
+            &command_input,
+            |this, _input, event: &CommandInputEvent, cx| match event {
+                CommandInputEvent::Submit(text) => {
+                    let outcome = this
+                        .task_store
+                        .update(cx, |store, cx| store.execute_command(text, cx));
+                    match outcome {
+                        CommandOutcome::TogglePin => {
+                            this.always_on_top = !this.always_on_top;
+                            cx.notify();
+                        }
+                        CommandOutcome::Dock(side) => {
+                            this.dock_side = Some(side);
+                            this.always_on_top = true;
+                            cx.notify();
+                        }
+                        CommandOutcome::Float => {
+                            this.dock_side = None;
+                            this.always_on_top = false;
+                            cx.notify();
+                        }
+                        _ => {}
+                    }
+                }
+                CommandInputEvent::DismissSpotlight => {}
+            },
+        )
+        .detach();
+
         cx.observe_window_appearance(window, |this, _window, cx| {
             this.config_store.update(cx, |cfg, cx| {
                 cfg.sync_os_appearance(cx);
@@ -36,6 +74,7 @@ impl MainSidebarView {
         Self {
             config_store,
             task_store,
+            command_input,
             dock_side: None,
             always_on_top: false,
         }
@@ -405,35 +444,49 @@ impl MainSidebarView {
             .child(SharedString::from(label.to_string()))
     }
 
-    fn render_footer(&self, formatted_hotkey: &str, palette: ThemePalette) -> impl IntoElement {
+    fn render_footer(
+        &self,
+        formatted_hotkey: &str,
+        palette: ThemePalette,
+        is_dark: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let hotkey_label = if formatted_hotkey.is_empty() {
             "..."
         } else {
             formatted_hotkey
         };
 
-        div()
+        let (show_suggestions, matches, selected_index) = {
+            let input = self.command_input.read(cx);
+            let res = input.current_suggestions(cx);
+            (
+                !input.dismissed && !res.matches.is_empty(),
+                res.matches,
+                input.selected_index,
+            )
+        };
+
+        let mut footer = div()
             .id("sidebar-footer")
             .p_3()
             .bg(palette.footer_bg)
             .border_t_1()
             .border_color(palette.border)
-            .relative()
-            .child(
-                // Placeholder slot for CommandInputView (wired in Phase 4)
-                div()
-                    .id("command-input-placeholder")
-                    .w_full()
-                    .px(rems(0.5))
-                    .py(rems(0.25))
-                    .rounded(px(4.0))
-                    .bg(palette.input_bg)
-                    .border_1()
-                    .border_color(palette.input_border)
-                    .text_size(rems(0.875))
-                    .text_color(palette.muted_text)
-                    .child("Type a task..."),
-            )
+            .relative();
+
+        if show_suggestions {
+            footer = footer.child(render_autocomplete_popover(
+                &matches,
+                selected_index,
+                self.command_input.clone(),
+                palette,
+                is_dark,
+            ));
+        }
+
+        footer
+            .child(self.command_input.clone())
             .child(
                 div()
                     .flex()
@@ -568,6 +621,6 @@ impl Render for MainSidebarView {
                             }),
                     ),
             )
-            .child(self.render_footer(&formatted_hotkey, palette))
+            .child(self.render_footer(&formatted_hotkey, palette, is_dark, cx))
     }
 }

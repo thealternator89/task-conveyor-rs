@@ -6,11 +6,13 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0"
 dirs = "6.0"
+global-hotkey = "0.6"
 gpui = { path = "../rs-gpui-ref/crates/gpui" }
 gpui_platform = { path = "../rs-gpui-ref/crates/gpui_platform", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
 notify = "8.0"
 open = "5.3"
 regex = "1.11"
+rfd = "0.15"
 rust-embed = "8.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
