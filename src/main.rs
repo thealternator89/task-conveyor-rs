@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 pub mod assets;
 pub mod autocomplete;
 pub mod config_store;
