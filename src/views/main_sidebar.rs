@@ -8,8 +8,8 @@ use crate::views::tag_text::{render_task_text_with_options, render_task_text_wit
 use crate::window_manager::WindowManager;
 use gpui::{
     Animation, AnimationExt as _, BoxShadow, Context, Entity, FontWeight, MouseButton, PathBuilder,
-    SharedString, Window, canvas, div, img, linear_color_stop, linear_gradient, point, prelude::*,
-    pulsating_between, px, rems, rgb, svg,
+    SharedString, Window, WindowControlArea, canvas, div, img, linear_color_stop, linear_gradient,
+    point, prelude::*, pulsating_between, px, rems, rgb, svg,
 };
 use std::time::Duration;
 
@@ -156,9 +156,10 @@ impl MainSidebarView {
             .border_b_1()
             .border_color(palette.border)
             .when(!is_docked, |this| {
-                this.on_mouse_down(MouseButton::Left, |_, window, _| {
-                    window.start_window_move();
-                })
+                this.window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |_, window, _| {
+                        window.start_window_move();
+                    })
             })
             .child(
                 div()
