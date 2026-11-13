@@ -46,6 +46,9 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Setup NSIS
+        uses: nsis-dev/setup-nsis@v1
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
