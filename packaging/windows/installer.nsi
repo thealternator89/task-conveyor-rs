@@ -16,22 +16,12 @@
   !define VERSION "0.1.0"
 !endif
 
-; Resolve icon path whether makensis runs with /NOCD from root or from script dir
 !ifndef ICON_PATH
-  !ifFileExists "assets\icon.ico"
-    !define ICON_PATH "assets\icon.ico"
-  !else
-    !define ICON_PATH "..\..\assets\icon.ico"
-  !endif
+  !define ICON_PATH "assets\icon.ico"
 !endif
 
-; Resolve executable path whether makensis runs with /NOCD from root or from script dir
 !ifndef EXE_PATH
-  !ifFileExists "target\x86_64-pc-windows-msvc\release\task-conveyor-rs.exe"
-    !define EXE_PATH "target\x86_64-pc-windows-msvc\release\task-conveyor-rs.exe"
-  !else
-    !define EXE_PATH "..\..\target\x86_64-pc-windows-msvc\release\task-conveyor-rs.exe"
-  !endif
+  !define EXE_PATH "target\x86_64-pc-windows-msvc\release\task-conveyor-rs.exe"
 !endif
 
 !ifndef OUTPUT_FILE
