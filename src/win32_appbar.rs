@@ -88,6 +88,7 @@ mod imp {
     use super::*;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use std::mem::{size_of, zeroed};
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows_sys::Win32::UI::Shell::{
@@ -106,6 +107,7 @@ mod imp {
     static ACTIVE_PHYSICAL_WIDTH: AtomicIsize = AtomicIsize::new(400);
     static IS_REENTERING_APPBAR: AtomicBool = AtomicBool::new(false);
     static POSCHANGED_PENDING: AtomicBool = AtomicBool::new(false);
+    static COMMITTED_APPBAR_RECT: Mutex<Option<PhysicalRect>> = Mutex::new(None);
 
     pub fn extract_hwnd(window: &gpui::Window) -> Option<HWND> {
         let handle = HasWindowHandle::window_handle(window).ok()?;
@@ -124,7 +126,11 @@ mod imp {
         _dw_ref_data: usize,
     ) -> LRESULT {
         if u_msg == MY_APPBAR_MSG_ID && w_param == ABN_POSCHANGED as usize {
-            POSCHANGED_PENDING.store(true, Ordering::SeqCst);
+            // Only flag pending if this notification was not triggered synchronously
+            // by our own ABM_SETPOS call.
+            if !IS_REENTERING_APPBAR.load(Ordering::SeqCst) {
+                POSCHANGED_PENDING.store(true, Ordering::SeqCst);
+            }
         }
         unsafe { DefSubclassProc(hwnd, u_msg, w_param, l_param) }
     }
@@ -169,6 +175,9 @@ mod imp {
                 if prev_hwnd != 0 {
                     remove_appbar_by_hwnd(prev_hwnd as HWND);
                 }
+                if let Ok(mut committed) = COMMITTED_APPBAR_RECT.lock() {
+                    *committed = None;
+                }
                 let mut new_abd: APPBARDATA = zeroed();
                 new_abd.cbSize = size_of::<APPBARDATA>() as u32;
                 new_abd.hWnd = hwnd;
@@ -203,6 +212,16 @@ mod imp {
                 bottom: abd.rc.bottom,
             };
             let adjusted = adjust_appbar_edge_width(queried, side, physical_width);
+
+            // If the query position matches what was already committed for this window,
+            // we do not call ABM_SETPOS again. Calling ABM_SETPOS needlessly broadcasts
+            // ABN_POSCHANGED to all registered appbars (including ourselves).
+            if let Ok(committed) = COMMITTED_APPBAR_RECT.lock() {
+                if *committed == Some(adjusted) && prev_hwnd == hwnd as isize {
+                    return Some(physical_rect_to_dip_bounds(adjusted, scale));
+                }
+            }
+
             abd.rc = RECT {
                 left: adjusted.left,
                 top: adjusted.top,
@@ -218,6 +237,10 @@ mod imp {
                 right: abd.rc.right,
                 bottom: abd.rc.bottom,
             };
+
+            if let Ok(mut committed) = COMMITTED_APPBAR_RECT.lock() {
+                *committed = Some(final_rect);
+            }
 
             SetWindowPos(
                 hwnd,
@@ -236,6 +259,9 @@ mod imp {
     pub unsafe fn remove_appbar_by_hwnd(hwnd: HWND) {
         if hwnd.is_null() {
             return;
+        }
+        if let Ok(mut committed) = COMMITTED_APPBAR_RECT.lock() {
+            *committed = None;
         }
         unsafe {
             let _ = RemoveWindowSubclass(hwnd, Some(appbar_subclass_proc), APPBAR_SUBCLASS_ID);
@@ -263,6 +289,9 @@ mod imp {
     }
 
     pub fn cleanup_appbar() {
+        if let Ok(mut committed) = COMMITTED_APPBAR_RECT.lock() {
+            *committed = None;
+        }
         let hwnd = ACTIVE_APPBAR_HWND.swap(0, Ordering::SeqCst);
         if hwnd != 0 {
             unsafe {

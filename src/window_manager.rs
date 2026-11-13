@@ -50,6 +50,15 @@ pub fn centered_sidebar_bounds(cx: &App) -> Bounds<Pixels> {
     }
 }
 
+#[allow(dead_code)]
+fn display_bounds_for_window(window: &Window, cx: &App) -> Bounds<Pixels> {
+    window
+        .display(cx)
+        .or_else(|| cx.primary_display())
+        .map(|display| display.bounds())
+        .unwrap_or_else(|| Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0))))
+}
+
 fn work_area_for_window(window: &Window, cx: &App) -> Bounds<Pixels> {
     window
         .display(cx)
@@ -193,30 +202,36 @@ impl WindowManager {
         if let Some(main_handle) = self.main_window {
             let mut registered = self.appbar_registered;
             let _ = main_handle.update(cx, |_view, window, cx| {
-                let work_area = work_area_for_window(window, cx);
-                let target_bounds = compute_dock_bounds(side, work_area, px(DOCK_WIDTH));
-
                 #[cfg(target_os = "windows")]
                 {
+                    let display_bounds = display_bounds_for_window(window, cx);
+                    let target_bounds = compute_dock_bounds(side, display_bounds, px(DOCK_WIDTH));
+
                     if let Some(final_bounds) =
                         win32_appbar::dock_appbar(window, side, target_bounds)
                     {
                         window.resize(final_bounds.size);
                         registered = true;
                     } else {
-                        win32_appbar::set_window_bounds_and_topmost(window, target_bounds, true);
-                        window.resize(target_bounds.size);
+                        let work_area = work_area_for_window(window, cx);
+                        let fallback_bounds = compute_dock_bounds(side, work_area, px(DOCK_WIDTH));
+                        win32_appbar::set_window_bounds_and_topmost(window, fallback_bounds, true);
+                        window.resize(fallback_bounds.size);
                     }
                 }
 
                 #[cfg(target_os = "macos")]
                 {
+                    let work_area = work_area_for_window(window, cx);
+                    let target_bounds = compute_dock_bounds(side, work_area, px(DOCK_WIDTH));
                     let _ = &mut registered;
                     macos_window::apply_bounds_and_level(window, target_bounds, true, true);
                 }
 
                 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                 {
+                    let work_area = work_area_for_window(window, cx);
+                    let target_bounds = compute_dock_bounds(side, work_area, px(DOCK_WIDTH));
                     let _ = &mut registered;
                     window.resize(target_bounds.size);
                 }
@@ -446,6 +461,21 @@ mod tests {
         let right = compute_dock_bounds(DockSide::Right, work_area, px(400.0));
         assert_eq!(right.origin, point(px(-400.0), px(0.0)));
         assert_eq!(right.size, size(px(400.0), px(900.0)));
+    }
+
+    #[test]
+    fn test_compute_dock_bounds_monitor_bounds_stable_across_work_area_changes() {
+        // Full monitor bounds (does not change when AppBar docks)
+        let display_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let dock_right = compute_dock_bounds(DockSide::Right, display_bounds, px(400.0));
+        assert_eq!(dock_right.origin, point(px(1520.0), px(0.0)));
+        assert_eq!(dock_right.size, size(px(400.0), px(1080.0)));
+
+        // If someone used work_area (which shrank from 1920 to 1520), it would compute 1120:
+        let shrunken_work_area =
+            Bounds::new(point(px(0.0), px(0.0)), size(px(1520.0), px(1040.0)));
+        let bad_dock_right = compute_dock_bounds(DockSide::Right, shrunken_work_area, px(400.0));
+        assert_eq!(bad_dock_right.origin, point(px(1120.0), px(0.0)));
     }
 
     #[test]
