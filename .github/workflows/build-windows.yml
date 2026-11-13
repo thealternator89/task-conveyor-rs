@@ -64,7 +64,10 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -match '^v?([0-9]+\.[0-9]+\.[0-9]+.*)$') {
               $version = $Matches[1]
           }
-          makensis /NOCD /DVERSION=$version /DEXE_PATH=target/x86_64-pc-windows-msvc/release/task-conveyor-rs.exe /DOUTPUT_FILE=target/x86_64-pc-windows-msvc/release/TaskConveyor-Setup.exe packaging/windows/installer.nsi
+          $exePath = (Resolve-Path "target\x86_64-pc-windows-msvc\release\task-conveyor-rs.exe").Path
+          $outPath = Join-Path (Get-Location) "target\x86_64-pc-windows-msvc\release\TaskConveyor-Setup.exe"
+          $iconPath = (Resolve-Path "assets\icon.ico").Path
+          makensis /NOCD "/DVERSION=$version" "/DEXE_PATH=$exePath" "/DICON_PATH=$iconPath" "/DOUTPUT_FILE=$outPath" packaging\windows\installer.nsi
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
