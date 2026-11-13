@@ -83,6 +83,27 @@ pub fn adjust_appbar_edge_width(
     rect
 }
 
+/// Insets representing the invisible resizing / drop shadow borders that Windows 10/11
+/// applies to `WS_THICKFRAME` windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FrameInsets {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// Expands a target physical client/content rect outward by the frame insets so that
+/// `SetWindowPos` places the window's visible client area exactly at `rect`.
+pub fn compensate_frame_insets(rect: PhysicalRect, insets: FrameInsets) -> PhysicalRect {
+    PhysicalRect {
+        left: rect.left - insets.left,
+        top: rect.top - insets.top,
+        right: rect.right + insets.right,
+        bottom: rect.bottom + insets.bottom,
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod imp {
     use super::*;
@@ -90,15 +111,137 @@ mod imp {
     use std::mem::{size_of, zeroed};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::Foundation::{
+        BOOL, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    };
     use windows_sys::Win32::UI::Shell::{
         ABE_LEFT, ABE_RIGHT, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABN_POSCHANGED,
         APPBARDATA, DefSubclassProc, RemoveWindowSubclass, SHAppBarMessage, SetWindowSubclass,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, SW_RESTORE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow,
+        GetClientRect, GetWindowRect, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, SW_RESTORE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow,
     };
+
+    type DwmGetWindowAttributeFn = unsafe extern "system" fn(
+        HWND,
+        u32,
+        *mut std::ffi::c_void,
+        u32,
+    ) -> i32;
+
+    const DWMWA_EXTENDED_FRAME_BOUNDS: u32 = 9;
+
+    unsafe extern "system" {
+        fn GetModuleHandleA(lp_module_name: *const u8) -> HMODULE;
+        fn LoadLibraryA(lp_lib_file_name: *const u8) -> HMODULE;
+        fn GetProcAddress(
+            h_module: HMODULE,
+            lp_proc_name: *const u8,
+        ) -> Option<unsafe extern "system" fn() -> isize>;
+        fn ClientToScreen(hwnd: HWND, lp_point: *mut POINT) -> BOOL;
+    }
+
+    pub unsafe fn get_window_frame_insets(hwnd: HWND, scale_factor: f32) -> FrameInsets {
+        if hwnd.is_null() {
+            return FrameInsets::default();
+        }
+
+        let mut win_rect: RECT = zeroed();
+        if GetWindowRect(hwnd, &mut win_rect) == 0 {
+            let default_border =
+                (7.0 * if scale_factor > 0.0 { scale_factor } else { 1.0 }).round() as i32;
+            return FrameInsets {
+                left: default_border,
+                top: 0,
+                right: default_border,
+                bottom: default_border,
+            };
+        }
+
+        // 1. Try DwmGetWindowAttribute with DWMWA_EXTENDED_FRAME_BOUNDS.
+        let mut h_dwm = GetModuleHandleA(b"dwmapi.dll\0".as_ptr());
+        if h_dwm.is_null() {
+            h_dwm = LoadLibraryA(b"dwmapi.dll\0".as_ptr());
+        }
+        if !h_dwm.is_null() {
+            if let Some(proc) = GetProcAddress(h_dwm, b"DwmGetWindowAttribute\0".as_ptr()) {
+                let dwm_get_attr: DwmGetWindowAttributeFn = std::mem::transmute(proc);
+                let mut frame_bounds: RECT = zeroed();
+                let hr = dwm_get_attr(
+                    hwnd,
+                    DWMWA_EXTENDED_FRAME_BOUNDS,
+                    &mut frame_bounds as *mut _ as *mut std::ffi::c_void,
+                    size_of::<RECT>() as u32,
+                );
+                if hr == 0
+                    && frame_bounds.right > frame_bounds.left
+                    && frame_bounds.bottom > frame_bounds.top
+                {
+                    let left = (frame_bounds.left - win_rect.left).max(0);
+                    let top = (frame_bounds.top - win_rect.top).max(0);
+                    let right = (win_rect.right - frame_bounds.right).max(0);
+                    let bottom = (win_rect.bottom - frame_bounds.bottom).max(0);
+                    if left > 0 || right > 0 || bottom > 0 || top > 0 {
+                        return FrameInsets {
+                            left,
+                            top,
+                            right,
+                            bottom,
+                        };
+                    }
+                }
+            }
+        }
+
+        // 2. Try ClientToScreen combined with GetClientRect.
+        let mut client_rect: RECT = zeroed();
+        if GetClientRect(hwnd, &mut client_rect) != 0 {
+            let win_width = win_rect.right - win_rect.left;
+            let win_height = win_rect.bottom - win_rect.top;
+            let client_width = client_rect.right - client_rect.left;
+            let client_height = client_rect.bottom - client_rect.top;
+
+            let mut client_origin = POINT { x: 0, y: 0 };
+            if ClientToScreen(hwnd, &mut client_origin) != 0 {
+                let left = (client_origin.x - win_rect.left).max(0);
+                let top = (client_origin.y - win_rect.top).max(0);
+                let right = (win_width - client_width - left).max(0);
+                let bottom = (win_height - client_height - top).max(0);
+                if left > 0 || right > 0 || bottom > 0 || top > 0 {
+                    return FrameInsets {
+                        left,
+                        top,
+                        right,
+                        bottom,
+                    };
+                }
+            }
+
+            let width_diff = (win_width - client_width).max(0);
+            let height_diff = (win_height - client_height).max(0);
+            if width_diff > 0 || height_diff > 0 {
+                let left = width_diff / 2;
+                let right = width_diff - left;
+                return FrameInsets {
+                    left,
+                    top: 0,
+                    right,
+                    bottom: height_diff,
+                };
+            }
+        }
+
+        // 3. Fallback to standard 7px scaled for DPI.
+        let default_border =
+            (7.0 * if scale_factor > 0.0 { scale_factor } else { 1.0 }).round() as i32;
+        FrameInsets {
+            left: default_border,
+            top: 0,
+            right: default_border,
+            bottom: default_border,
+        }
+    }
 
     const APPBAR_SUBCLASS_ID: usize = 0x5443_4142; // "TCAB"
 
@@ -213,11 +356,23 @@ mod imp {
             };
             let adjusted = adjust_appbar_edge_width(queried, side, physical_width);
 
+            let insets = get_window_frame_insets(hwnd, scale);
+            let window_rect = compensate_frame_insets(adjusted, insets);
+
             // If the query position matches what was already committed for this window,
             // we do not call ABM_SETPOS again. Calling ABM_SETPOS needlessly broadcasts
             // ABN_POSCHANGED to all registered appbars (including ourselves).
             if let Ok(committed) = COMMITTED_APPBAR_RECT.lock() {
                 if *committed == Some(adjusted) && prev_hwnd == hwnd as isize {
+                    SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        window_rect.left,
+                        window_rect.top,
+                        window_rect.width(),
+                        window_rect.height(),
+                        SWP_SHOWWINDOW,
+                    );
                     return Some(physical_rect_to_dip_bounds(adjusted, scale));
                 }
             }
@@ -242,13 +397,15 @@ mod imp {
                 *committed = Some(final_rect);
             }
 
+            let final_window_rect = compensate_frame_insets(final_rect, insets);
+
             SetWindowPos(
                 hwnd,
                 HWND_TOPMOST,
-                final_rect.left,
-                final_rect.top,
-                final_rect.width(),
-                final_rect.height(),
+                final_window_rect.left,
+                final_window_rect.top,
+                final_window_rect.width(),
+                final_window_rect.height(),
                 SWP_SHOWWINDOW,
             );
 
@@ -306,7 +463,10 @@ mod imp {
         always_on_top: bool,
     ) {
         if let Some(hwnd) = extract_hwnd(window) {
-            let rect = dip_bounds_to_physical_rect(bounds_dip, window.scale_factor());
+            let scale = window.scale_factor();
+            let rect = dip_bounds_to_physical_rect(bounds_dip, scale);
+            let insets = unsafe { get_window_frame_insets(hwnd, scale) };
+            let window_rect = compensate_frame_insets(rect, insets);
             let insert_after = if always_on_top {
                 HWND_TOPMOST
             } else {
@@ -316,10 +476,10 @@ mod imp {
                 SetWindowPos(
                     hwnd,
                     insert_after,
-                    rect.left,
-                    rect.top,
-                    rect.width(),
-                    rect.height(),
+                    window_rect.left,
+                    window_rect.top,
+                    window_rect.width(),
+                    window_rect.height(),
                     SWP_SHOWWINDOW,
                 );
             }
@@ -437,5 +597,124 @@ mod tests {
     fn test_edge_for_dock_side() {
         assert_eq!(edge_for_dock_side(DockSide::Left), ABE_LEFT_EDGE);
         assert_eq!(edge_for_dock_side(DockSide::Right), ABE_RIGHT_EDGE);
+    }
+
+    #[test]
+    fn test_compensate_frame_insets_left_dock_eliminates_7px_gap() {
+        // Reserved AppBar screen rect on 100% scale display (1920x1080)
+        let final_rect = PhysicalRect {
+            left: 0,
+            top: 0,
+            right: 400,
+            bottom: 1080,
+        };
+        // Standard Windows 10/11 invisible frame resize border insets (7px left, right, bottom)
+        let insets = FrameInsets {
+            left: 7,
+            top: 0,
+            right: 7,
+            bottom: 7,
+        };
+        let window_rect = compensate_frame_insets(final_rect, insets);
+        assert_eq!(
+            window_rect,
+            PhysicalRect {
+                left: -7,
+                top: 0,
+                right: 407,
+                bottom: 1087,
+            }
+        );
+        assert_eq!(window_rect.width(), 414);
+        assert_eq!(window_rect.height(), 1087);
+
+        // When the window frame is placed at `window_rect`, the resulting visible
+        // client area is offset by `insets.left`, exactly matching `final_rect`.
+        let visible_left = window_rect.left + insets.left;
+        let visible_right = window_rect.right - insets.right;
+        let visible_top = window_rect.top + insets.top;
+        let visible_bottom = window_rect.bottom - insets.bottom;
+        assert_eq!(visible_left, 0);
+        assert_eq!(visible_top, 0);
+        assert_eq!(visible_right, 400);
+        assert_eq!(visible_bottom, 1080);
+    }
+
+    #[test]
+    fn test_compensate_frame_insets_right_dock_eliminates_7px_overflow() {
+        // Reserved AppBar screen rect on 100% scale display (1920x1080)
+        let final_rect = PhysicalRect {
+            left: 1520,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let insets = FrameInsets {
+            left: 7,
+            top: 0,
+            right: 7,
+            bottom: 7,
+        };
+        let window_rect = compensate_frame_insets(final_rect, insets);
+        assert_eq!(
+            window_rect,
+            PhysicalRect {
+                left: 1513,
+                top: 0,
+                right: 1927,
+                bottom: 1087,
+            }
+        );
+        assert_eq!(window_rect.width(), 414);
+        assert_eq!(window_rect.height(), 1087);
+
+        // Visible client area ends flush with the right screen edge (1920),
+        // preventing the 7px off-screen spill and 7px gap on the left.
+        let visible_left = window_rect.left + insets.left;
+        let visible_right = window_rect.right - insets.right;
+        assert_eq!(visible_left, 1520);
+        assert_eq!(visible_right, 1920);
+        assert_eq!(visible_right - visible_left, 400);
+    }
+
+    #[test]
+    fn test_compensate_frame_insets_hidpi_scaling() {
+        // HiDPI 150% scale display (e.g. 11px border)
+        let final_rect = PhysicalRect {
+            left: 0,
+            top: 0,
+            right: 600,
+            bottom: 1620,
+        };
+        let insets = FrameInsets {
+            left: 11,
+            top: 0,
+            right: 11,
+            bottom: 11,
+        };
+        let window_rect = compensate_frame_insets(final_rect, insets);
+        assert_eq!(
+            window_rect,
+            PhysicalRect {
+                left: -11,
+                top: 0,
+                right: 611,
+                bottom: 1631,
+            }
+        );
+        assert_eq!(window_rect.left + insets.left, 0);
+        assert_eq!(window_rect.right - insets.right, 600);
+    }
+
+    #[test]
+    fn test_compensate_frame_insets_zero_insets() {
+        let final_rect = PhysicalRect {
+            left: 100,
+            top: 50,
+            right: 500,
+            bottom: 800,
+        };
+        let insets = FrameInsets::default();
+        assert_eq!(compensate_frame_insets(final_rect, insets), final_rect);
     }
 }
