@@ -10,23 +10,23 @@
 Tasks automatically shift up like a conveyor belt as you finish them, complete with demotion guards for urgent items, inline tag autocomplete, and instant text expansions.
 
 > [!NOTE]
-> This repository is a high-performance port of the original TypeScript/Electron/React [TaskConveyor](https://github.com/thealternator89/task-conveyor) application to **Rust** and Zed's GPU-accelerated **GPUI** framework.
+> This repository is a high-performance rewrite of the earlier Electron-based [TaskConveyor](https://github.com/thealternator89/task-conveyor) using **Rust** and Zed's GPU-accelerated **GPUI** framework.
 
 ---
 
-## Why the Rust + GPUI Port?
+## Why Rust + GPUI?
 
-The original TaskConveyor was built with Electron, React, and TypeScript. While fully featured, it relied on three separate operating system processes (Main process + 2 Chromium renderers) communicating over asynchronous IPC channels, resulting in noticeable memory overhead (~150–300+ MB) and Electron runtime initialization delay.
+The earlier version of TaskConveyor was built with Electron, React, and TypeScript. While fully featured, it relied on three separate operating system processes (Main process + 2 Chromium renderers) communicating over asynchronous IPC channels, resulting in noticeable memory overhead (~150–300+ MB) and Electron runtime initialization delay.
 
-| Metric / Aspect | Original (Electron + React) | Ported (Rust + GPUI) |
+| Metric / Aspect | Electron Version | Rust + GPUI |
 | :--- | :--- | :--- |
 | **Architecture** | 3 OS processes (Main + 2 Chromium renderers) | **1 unified native process** |
 | **Memory Footprint** | ~150 MB – 300+ MB RAM | **~20 MB – 30 MB RAM** |
 | **Cold Startup Time** | ~1.5 – 3.0 seconds | **Sub-second / instant** |
+| **Package Size** | 150 MB | **16 MB** |
 | **Renderer** | Chromium DOM + CSS paint engine | **GPU-accelerated native GPUI rendering** |
 | **Cross-Window State** | Asynchronous IPC serialization & bridges | **Zero-copy shared in-memory reactive state** |
 | **Windows Docking** | Win32 FFI via `koffi` binding | **Direct Win32 API FFI (`windows-sys`)** |
-| **Binary Footprint** | ~150 MB packaged Electron runtime | **Single compact native executable** |
 
 ---
 
@@ -235,10 +235,10 @@ The resulting binary will be located at:
 
 ---
 
-## Origin & Credits
+## Acknowledgements
 
-- Ported from the original Electron application: [**TaskConveyor**](https://github.com/thealternator89/task-conveyor) by [Mark Benson](https://github.com/thealternator89).
 - Built using the [**GPUI**](https://github.com/zed-industries/zed) UI framework by the Zed Industries team.
+- Based on the earlier Electron-based [**TaskConveyor**](https://github.com/thealternator89/task-conveyor).
 
 ---
 
