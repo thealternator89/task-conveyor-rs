@@ -404,6 +404,7 @@ rfd = "0.15"
       - If `show_suggestions`: `"[Tab] Tag"` / `"[Tab] Project"` / `"[Tab] Mention"`
       - Else if `value.starts_with("!!")`: `"⚡ Current Slot"`
       - Else if `value.starts_with("!")`: `"➡️ Next Slot"`
+      - Else if `value.starts_with("/")`: `"Command"`
       - Else: `"📥 End of List"`
   - **Bottom Lip (`height: 24px`, `px(12.0)` padding, `border-top`)**:
     - Left hints (`gap: 10px`): `! next`, `!! current`, `# tag`, `$ project`, `@ mention` (with monospace key badges).

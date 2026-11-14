@@ -46,6 +46,7 @@ pub fn spotlight_window_options(cx: &App) -> WindowOptions {
 /// - When suggestions are active: `"[Tab] Tag"` / `"[Tab] Project"` / `"[Tab] Mention"`
 /// - Else if `value` starts with `"!!"`: `"⚡ Current Slot"`
 /// - Else if `value` starts with `"!"`: `"➡️ Next Slot"`
+/// - Else if `value` starts with `"/"`: `"Command"`
 /// - Else: `"📥 End of List"`
 pub fn spotlight_badge_text(
     value: &str,
@@ -57,6 +58,8 @@ pub fn spotlight_badge_text(
         "⚡ Current Slot"
     } else if value.starts_with('!') {
         "➡️ Next Slot"
+    } else if value.starts_with('/') {
+        "Command"
     } else {
         "📥 End of List"
     }
@@ -276,6 +279,11 @@ mod tests {
             "⚡ Current Slot"
         );
 
+        // Leading `/` -> Command
+        assert_eq!(spotlight_badge_text("/", None), "Command");
+        assert_eq!(spotlight_badge_text("/help", None), "Command");
+        assert_eq!(spotlight_badge_text("/done", None), "Command");
+
         // Active autocomplete suggestion overrides prefix badges
         assert_eq!(
             spotlight_badge_text("!!#urg", Some(AutocompleteType::Tag)),
@@ -288,6 +296,10 @@ mod tests {
         assert_eq!(
             spotlight_badge_text("Ping @al", Some(AutocompleteType::Mention)),
             "[Tab] Mention"
+        );
+        assert_eq!(
+            spotlight_badge_text("/edit 1 #urg", Some(AutocompleteType::Tag)),
+            "[Tab] Tag"
         );
     }
 }
