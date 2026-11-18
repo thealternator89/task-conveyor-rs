@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const HELP_MESSAGE: &str = "Commands: /done [b], /break, /move x y, /move x u|d [y], /remove x, /edit x text, /undo, /important, /pin, /dock [l|r], /float, /config, /tags, /theme [dark|light|system], /clear, /exit, /help (Use #tag, $project, @mention + [Tab])";
+pub const HELP_MESSAGE: &str = "Commands: /done [b], /break, /cal [curr|next] [now|queue], /move x y, /move x u|d [y], /remove x, /edit x text, /undo, /important, /pin, /dock [l|r], /float, /config, /tags, /theme [dark|light|system], /clear, /exit, /help (Use #tag, $project, @mention + [Tab])";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +32,19 @@ pub enum ThemeTarget {
     Toggle,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalendarEventSelector {
+    CurrentOrNext,
+    CurrentOnly,
+    NextOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalendarSlotTarget {
+    Now,
+    Queue,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommandOutcome {
     TasksUpdated,
@@ -42,6 +55,10 @@ pub enum CommandOutcome {
     OpenConfig,
     OpenAutocompleteConfig,
     SetTheme(ThemeTarget),
+    FetchCalendarEvent {
+        selector: CalendarEventSelector,
+        target: CalendarSlotTarget,
+    },
     Quit,
     NoOp,
 }
@@ -60,7 +77,9 @@ static RE_EDIT: LazyLock<Regex> =
 static RE_UNDO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^/u(?:ndo)?$").unwrap());
 static RE_IMPORTANT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^/i(?:mportant)?$").unwrap());
-static RE_CLEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^/c(?:lear)?$").unwrap());
+static RE_CLEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^/clear$").unwrap());
+static RE_CAL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^/c(?:al)?(?:\s+(.*))?$").unwrap());
 static RE_PIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^/p(?:in)?$").unwrap());
 static RE_DOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^/dock(?:\s+(l|left|r|right))?$").unwrap());
@@ -252,7 +271,7 @@ impl TaskEngine {
             return CommandOutcome::TasksUpdated;
         }
 
-        // /c[lear]
+        // /clear
         if RE_CLEAR.is_match(text) {
             if self.tasks.is_empty() {
                 return CommandOutcome::Warning("List is already empty.".to_string());
@@ -260,6 +279,26 @@ impl TaskEngine {
             self.save_history();
             self.tasks.clear();
             return CommandOutcome::TasksUpdated;
+        }
+
+        // /c[al] [curr|next] [now|queue]
+        if let Some(caps) = RE_CAL.captures(text) {
+            let args_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let (selector, target) = match Self::parse_cal_args(args_str) {
+                Ok(parsed) => parsed,
+                Err(msg) => return CommandOutcome::Warning(msg),
+            };
+
+            if target == CalendarSlotTarget::Now
+                && self.tasks.first().is_some_and(|t| t.important)
+            {
+                return CommandOutcome::Warning(
+                    "Cannot prepend task: current task is important and cannot be demoted."
+                        .to_string(),
+                );
+            }
+
+            return CommandOutcome::FetchCalendarEvent { selector, target };
         }
 
         // /p[in]
@@ -403,6 +442,130 @@ impl TaskEngine {
             self.tasks.insert(to_index, moved);
         }
         CommandOutcome::TasksUpdated
+    }
+
+    fn parse_cal_args(
+        args_str: &str,
+    ) -> Result<(CalendarEventSelector, CalendarSlotTarget), String> {
+        let tokens: Vec<String> = args_str
+            .split_whitespace()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+
+        let usage_err = || "Usage: /cal [curr|next] [now|queue]".to_string();
+
+        match tokens.len() {
+            0 => Ok((
+                CalendarEventSelector::CurrentOrNext,
+                CalendarSlotTarget::Now,
+            )),
+            1 => match tokens[0].as_str() {
+                "curr" | "current" => {
+                    Ok((CalendarEventSelector::CurrentOnly, CalendarSlotTarget::Now))
+                }
+                "next" => Ok((CalendarEventSelector::NextOnly, CalendarSlotTarget::Now)),
+                "now" => Ok((
+                    CalendarEventSelector::CurrentOrNext,
+                    CalendarSlotTarget::Now,
+                )),
+                "queue" => Ok((
+                    CalendarEventSelector::CurrentOrNext,
+                    CalendarSlotTarget::Queue,
+                )),
+                _ => Err(usage_err()),
+            },
+            2 => {
+                let selector = match tokens[0].as_str() {
+                    "curr" | "current" => CalendarEventSelector::CurrentOnly,
+                    "next" => CalendarEventSelector::NextOnly,
+                    _ => return Err(usage_err()),
+                };
+                let target = match tokens[1].as_str() {
+                    "now" => CalendarSlotTarget::Now,
+                    "queue" => CalendarSlotTarget::Queue,
+                    _ => return Err(usage_err()),
+                };
+                Ok((selector, target))
+            }
+            _ => Err(usage_err()),
+        }
+    }
+
+    pub fn apply_calendar_event(
+        &mut self,
+        raw_title: &str,
+        target: CalendarSlotTarget,
+    ) -> CommandOutcome {
+        let title = raw_title.trim();
+        if title.is_empty() {
+            return CommandOutcome::Warning("Calendar event has no title.".to_string());
+        }
+
+        let existing_index = self
+            .tasks
+            .iter()
+            .position(|t| !t.is_break && t.text.eq_ignore_ascii_case(title));
+
+        match target {
+            CalendarSlotTarget::Now => {
+                if self.tasks.first().is_some_and(|t| t.important) {
+                    return CommandOutcome::Warning(
+                        "Cannot prepend task: current task is important and cannot be demoted."
+                            .to_string(),
+                    );
+                }
+
+                if existing_index == Some(0) {
+                    return CommandOutcome::Warning(format!(
+                        "\"{title}\" is already the current task."
+                    ));
+                }
+
+                self.save_history();
+
+                if let Some(idx) = existing_index {
+                    let moved = self.tasks.remove(idx);
+                    if self.tasks.first().is_some_and(|t| t.is_break) {
+                        self.tasks[0] = moved;
+                    } else {
+                        self.tasks.insert(0, moved);
+                    }
+                    return CommandOutcome::TasksUpdated;
+                }
+
+                let item = TaskItem {
+                    id: self.generate_id(),
+                    text: title.to_string(),
+                    completed: false,
+                    important: false,
+                    is_break: false,
+                };
+                if self.tasks.first().is_some_and(|t| t.is_break) {
+                    self.tasks[0] = item;
+                } else {
+                    self.tasks.insert(0, item);
+                }
+                CommandOutcome::TasksUpdated
+            }
+            CalendarSlotTarget::Queue => {
+                if existing_index.is_some() {
+                    return CommandOutcome::Warning(format!(
+                        "\"{title}\" is already in the task list."
+                    ));
+                }
+
+                self.save_history();
+                let item = TaskItem {
+                    id: self.generate_id(),
+                    text: title.to_string(),
+                    completed: false,
+                    important: false,
+                    is_break: false,
+                };
+                self.tasks.push(item);
+                CommandOutcome::TasksUpdated
+            }
+        }
     }
 }
 
@@ -670,6 +833,139 @@ mod tests {
         assert_eq!(
             engine.execute("/unknown"),
             CommandOutcome::Warning("Unrecognized command: /unknown".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cal_command_parsing_and_apply_calendar_event() {
+        let mut engine = TaskEngine::new();
+
+        // `/c` and `/cal` argument combinations
+        assert_eq!(
+            engine.execute("/c"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::CurrentOrNext,
+                target: CalendarSlotTarget::Now,
+            }
+        );
+        assert_eq!(
+            engine.execute("/cal"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::CurrentOrNext,
+                target: CalendarSlotTarget::Now,
+            }
+        );
+        assert_eq!(
+            engine.execute("/c curr"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::CurrentOnly,
+                target: CalendarSlotTarget::Now,
+            }
+        );
+        assert_eq!(
+            engine.execute("/cal next"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::NextOnly,
+                target: CalendarSlotTarget::Now,
+            }
+        );
+        assert_eq!(
+            engine.execute("/c queue"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::CurrentOrNext,
+                target: CalendarSlotTarget::Queue,
+            }
+        );
+        assert_eq!(
+            engine.execute("/c curr queue"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::CurrentOnly,
+                target: CalendarSlotTarget::Queue,
+            }
+        );
+        assert_eq!(
+            engine.execute("/cal next now"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::NextOnly,
+                target: CalendarSlotTarget::Now,
+            }
+        );
+        assert_eq!(
+            engine.execute("/cal next queue"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::NextOnly,
+                target: CalendarSlotTarget::Queue,
+            }
+        );
+        assert_eq!(
+            engine.execute("/cal invalid"),
+            CommandOutcome::Warning("Usage: /cal [curr|next] [now|queue]".to_string())
+        );
+
+        // Apply event to empty conveyor (`now`)
+        assert_eq!(
+            engine.apply_calendar_event("Sprint Planning", CalendarSlotTarget::Now),
+            CommandOutcome::TasksUpdated
+        );
+        assert_eq!(texts(&engine), vec!["Sprint Planning"]);
+
+        // Duplicate at slot 0 rejected
+        assert_eq!(
+            engine.apply_calendar_event("Sprint Planning", CalendarSlotTarget::Now),
+            CommandOutcome::Warning("\"Sprint Planning\" is already the current task.".to_string())
+        );
+
+        // Queue another calendar event
+        assert_eq!(
+            engine.apply_calendar_event("Design Review", CalendarSlotTarget::Queue),
+            CommandOutcome::TasksUpdated
+        );
+        assert_eq!(texts(&engine), vec!["Sprint Planning", "Design Review"]);
+
+        // Duplicate in queue rejected when target is `queue`
+        assert_eq!(
+            engine.apply_calendar_event("Design Review", CalendarSlotTarget::Queue),
+            CommandOutcome::Warning("\"Design Review\" is already in the task list.".to_string())
+        );
+
+        // Moving an existing queued event to slot 0 when target is `now`
+        assert_eq!(
+            engine.apply_calendar_event("Design Review", CalendarSlotTarget::Now),
+            CommandOutcome::TasksUpdated
+        );
+        assert_eq!(texts(&engine), vec!["Design Review", "Sprint Planning"]);
+
+        // Undo restores order prior to promoting "Design Review"
+        assert_eq!(engine.execute("/undo"), CommandOutcome::TasksUpdated);
+        assert_eq!(texts(&engine), vec!["Sprint Planning", "Design Review"]);
+
+        // Important guard rejects `/c` (`now`) before fetching, but allows `/c next queue`
+        engine.execute("/important");
+        assert_eq!(
+            engine.execute("/c"),
+            CommandOutcome::Warning(
+                "Cannot prepend task: current task is important and cannot be demoted.".to_string()
+            )
+        );
+        assert_eq!(
+            engine.execute("/c next queue"),
+            CommandOutcome::FetchCalendarEvent {
+                selector: CalendarEventSelector::NextOnly,
+                target: CalendarSlotTarget::Queue,
+            }
+        );
+
+        // Unmark important, start a break, then `apply_calendar_event(..., Now)` replaces the break
+        engine.execute("/important");
+        engine.execute("/break");
+        assert!(engine.tasks[0].is_break);
+        assert_eq!(
+            engine.apply_calendar_event("1:1 Sync", CalendarSlotTarget::Now),
+            CommandOutcome::TasksUpdated
+        );
+        assert_eq!(
+            texts(&engine),
+            vec!["1:1 Sync", "Sprint Planning", "Design Review"]
         );
     }
 }

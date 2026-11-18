@@ -5,6 +5,7 @@ pub mod autocomplete;
 pub mod config_store;
 pub mod expansions;
 pub mod hotkey;
+pub mod ical;
 pub mod paths;
 pub mod single_instance;
 pub mod task_engine;
