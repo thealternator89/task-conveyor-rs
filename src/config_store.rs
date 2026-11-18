@@ -29,6 +29,8 @@ pub struct AppConfig {
     pub global_hotkey: String,
     #[serde(default)]
     pub theme: ThemeMode,
+    #[serde(default)]
+    pub ical_url: String,
 }
 
 impl Default for AppConfig {
@@ -36,6 +38,7 @@ impl Default for AppConfig {
         Self {
             global_hotkey: default_hotkey(),
             theme: ThemeMode::System,
+            ical_url: String::new(),
         }
     }
 }
@@ -70,11 +73,23 @@ pub fn ensure_config_file_in(user_data: &Path, legacy_user_data: Option<&Path>) 
     if !file_path.exists() {
         if let Some(legacy_dir) = legacy_user_data {
             let legacy_path = legacy_dir.join(CONFIG_FILE_NAME);
-            if legacy_path.exists() && fs::copy(&legacy_path, &file_path).is_ok() {
-                return file_path;
+            if legacy_path.exists() {
+                let _ = fs::copy(&legacy_path, &file_path);
             }
         }
+    }
 
+    if file_path.exists() {
+        if let Ok(raw) = fs::read_to_string(&file_path)
+            && let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(&raw)
+            && !map.contains_key("icalUrl")
+        {
+            map.insert("icalUrl".to_string(), Value::String(String::new()));
+            if let Ok(serialized) = serde_json::to_string_pretty(&Value::Object(map)) {
+                let _ = fs::write(&file_path, serialized);
+            }
+        }
+    } else {
         let default_cfg = AppConfig::default();
         if let Ok(serialized) = serde_json::to_string_pretty(&default_cfg) {
             if let Err(err) = fs::write(&file_path, serialized) {
@@ -112,9 +127,17 @@ pub fn load_config_from(file_path: &Path) -> AppConfig {
                     _ => ThemeMode::System,
                 };
 
+                let ical_url = map
+                    .get("icalUrl")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_default();
+
                 AppConfig {
                     global_hotkey,
                     theme,
+                    ical_url,
                 }
             }
             _ => AppConfig::default(),
@@ -140,6 +163,9 @@ pub fn save_theme_to_config_file(file_path: &Path, theme: ThemeMode) -> AppConfi
 
     if !map.contains_key("globalHotkey") {
         map.insert("globalHotkey".to_string(), Value::String(default_hotkey()));
+    }
+    if !map.contains_key("icalUrl") {
+        map.insert("icalUrl".to_string(), Value::String(String::new()));
     }
     map.insert(
         "theme".to_string(),
@@ -609,21 +635,32 @@ mod tests {
         let loaded = load_config_from(&config_path);
         assert_eq!(loaded.global_hotkey, default_hotkey());
         assert_eq!(loaded.theme, ThemeMode::System);
+        assert_eq!(loaded.ical_url, "");
 
-        // Save theme while preserving globalHotkey and custom fields
+        // Save theme while preserving globalHotkey, icalUrl, and custom fields
         fs::write(
             &config_path,
-            r#"{"globalHotkey": "Ctrl+Shift+Space", "customField": 42}"#,
+            r#"{"globalHotkey": "Ctrl+Shift+Space", "icalUrl": " https://example.com/cal.ics ", "customField": 42}"#,
         )
         .unwrap();
         let updated = save_theme_to_config_file(&config_path, ThemeMode::Dark);
         assert_eq!(updated.global_hotkey, "Ctrl+Shift+Space");
         assert_eq!(updated.theme, ThemeMode::Dark);
+        assert_eq!(updated.ical_url, "https://example.com/cal.ics");
 
         let raw_json: Value =
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
         assert_eq!(raw_json["customField"], json!(42));
         assert_eq!(raw_json["theme"], json!("dark"));
+        assert_eq!(raw_json["icalUrl"], json!(" https://example.com/cal.ics "));
+
+        // Verify ensure_config_file_in injects missing "icalUrl" into an existing config.json
+        fs::write(&config_path, r#"{"globalHotkey": "Option+Space"}"#).unwrap();
+        ensure_config_file_in(&user_data, None);
+        let raw_injected: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(raw_injected["icalUrl"], json!(""));
+        assert_eq!(raw_injected["globalHotkey"], json!("Option+Space"));
     }
 
     #[test]

@@ -1,7 +1,11 @@
 use crate::config_store::ConfigStore;
+use crate::ical::{fetch_and_select_event, normalize_ical_url};
 use crate::paths::tasks_file_path;
-use crate::task_engine::{CommandOutcome, TaskEngine, TaskItem};
+use crate::task_engine::{
+    CalendarEventSelector, CalendarSlotTarget, CommandOutcome, TaskEngine, TaskItem,
+};
 use crate::window_manager::WindowManager;
+use chrono::Local;
 use gpui::{Context, Entity, Task};
 use std::fs;
 use std::io;
@@ -47,6 +51,7 @@ pub struct TaskStore {
     pub engine: TaskEngine,
     pub warning: Option<String>,
     warning_timer: Option<Task<()>>,
+    calendar_fetch_task: Option<Task<()>>,
     pub storage_path: PathBuf,
     config_store: Entity<ConfigStore>,
     window_manager: Option<Entity<WindowManager>>,
@@ -60,6 +65,7 @@ impl TaskStore {
             engine: TaskEngine::with_tasks(initial_tasks),
             warning: None,
             warning_timer: None,
+            calendar_fetch_task: None,
             storage_path,
             config_store,
             window_manager: None,
@@ -157,10 +163,62 @@ impl TaskStore {
                     });
                 }
             }
+            CommandOutcome::FetchCalendarEvent { selector, target } => {
+                return self.start_calendar_fetch(*selector, *target, cx);
+            }
             CommandOutcome::NoOp => {}
         }
 
         outcome
+    }
+
+    fn start_calendar_fetch(
+        &mut self,
+        selector: CalendarEventSelector,
+        target: CalendarSlotTarget,
+        cx: &mut Context<Self>,
+    ) -> CommandOutcome {
+        let raw_url = self.config_store.read(cx).app_config.ical_url.clone();
+        let Some(url) = normalize_ical_url(&raw_url) else {
+            let msg = "No iCal feed URL configured. Run /config to set \"icalUrl\".".to_string();
+            self.set_warning(msg.clone(), cx);
+            return CommandOutcome::Warning(msg);
+        };
+
+        self.warning_timer = None;
+        self.warning = Some("Fetching calendar...".to_string());
+        cx.notify();
+
+        let executor = cx.background_executor().clone();
+        self.calendar_fetch_task = Some(cx.spawn(async move |this, cx| {
+            let now = Local::now();
+            let fetch_result = executor
+                .spawn(async move { fetch_and_select_event(&url, selector, now) })
+                .await;
+
+            let _ = this.update(cx, |store, cx| {
+                store.warning = None;
+                match fetch_result {
+                    Ok(summary) => match store.engine.apply_calendar_event(&summary, target) {
+                        CommandOutcome::TasksUpdated => {
+                            store.persist_tasks(cx);
+                            cx.notify();
+                        }
+                        CommandOutcome::Warning(msg) => {
+                            store.set_warning(msg, cx);
+                        }
+                        _ => {
+                            cx.notify();
+                        }
+                    },
+                    Err(err_msg) => {
+                        store.set_warning(err_msg, cx);
+                    }
+                }
+            });
+        }));
+
+        CommandOutcome::FetchCalendarEvent { selector, target }
     }
 }
 

@@ -84,6 +84,7 @@ Enter any of the following commands in the Spotlight overlay or the sidebar foot
 | `!!<text>` | **Prepend Task** | Inserts a task at index 0 as active task. *(Blocked if current task is marked important)*. |
 | `/d[one] [b[reak]]` | **Complete Task** | Completes active task (index 0). Passing `b` or `break` inserts a break immediately. |
 | `/b[reak]` | **Take Break** | Inserts a `Break ☕` card at index 0. *(Blocked if current task is marked important)*. |
+| `/c[al] [curr\|next] [now\|queue]` | **Add Calendar Event** | Fetches the configured iCal feed (`icalUrl`) and adds the current or next upcoming event today to the active slot (`now`) or end of the queue (`queue`). |
 | `/m[ove] x y` | **Absolute Move** | Moves task at index `x` to index `y` (0-indexed). *(Blocked if it demotes an important task)*. |
 | `/m[ove] x u\|d [y]` | **Relative Move** | Moves task `x` up (`u`) or down (`d`) by `y` spots (default 1). |
 | `/r[emove] x` | **Remove Task** | Deletes task at index `x` (0-indexed). |
@@ -96,7 +97,7 @@ Enter any of the following commands in the Spotlight overlay or the sidebar foot
 | `/theme [dark\|light\|system]` | **Set Theme** | Sets theme to `dark`, `light`, or `system` (or toggles with bare `/theme`). Aliases: `/dark`, `/light`. |
 | `/config` | **Open Config** | Opens `config.json` in your system's default editor. |
 | `/tags` or `/autocomplete` | **Open Autocomplete** | Opens `autocomplete.json` in your system's default editor. |
-| `/c[lear]` | **Clear All** | Removes all tasks from the queue. |
+| `/clear` | **Clear All** | Removes all tasks from the queue. |
 | `/x`, `/exit`, `/q[uit]` | **Exit App** | Cleanly exits TaskConveyor. |
 | `/h[elp]` or `/?` | **Help** | Displays interactive help info in the task list. |
 
@@ -117,12 +118,14 @@ Run `/config` inside TaskConveyor to open `config.json`:
 ```json
 {
   "globalHotkey": "Option+Space",
-  "theme": "system"
+  "theme": "system",
+  "icalUrl": ""
 }
 ```
 
 - `globalHotkey`: Any valid hotkey combination (e.g. `Option+Space`, `Ctrl+Space`, `Ctrl+Alt+T`, `Command+Shift+K`).
 - `theme`: `"system"`, `"dark"`, or `"light"`.
+- `icalUrl`: Optional iCal (`.ics`) feed URL (`https://`, `http://`, or `webcal://`) used by the `/cal` (`/c`) command.
 
 ### `autocomplete.json`
 
